@@ -1,0 +1,6 @@
+{
+  "name": "Akıllı Ev Ecza & Bakım Takip",
+  "description": "Evdeki ilaçları, bakım ürünlerini ve güneş kremlerini son kullanma tarihleri ve PAO (açıldıktan sonra kullanım süresi) ile takip edin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
