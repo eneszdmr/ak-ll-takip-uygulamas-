@@ -11,7 +11,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ProductEntity
@@ -20,7 +24,7 @@ import com.example.utils.ExpiryCalculator
 import com.example.utils.ExpiryStatus
 import java.time.LocalDate
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProductCard(
   product: ProductEntity,
@@ -40,7 +44,11 @@ fun ProductCard(
   val status = ExpiryCalculator.getStatus(daysLeft)
 
   val (statusBg, statusText, statusLabel) = when (status) {
-    ExpiryStatus.CRITICAL -> Triple(DangerRedBg, DangerRedText, if (daysLeft < 0) "${-daysLeft} gün geçti!" else "$daysLeft gün kaldı")
+    ExpiryStatus.CRITICAL -> Triple(
+      DangerRedBg,
+      DangerRedText,
+      if (daysLeft < 0) "${-daysLeft} gün geçti!" else "$daysLeft gün kaldı"
+    )
     ExpiryStatus.WARNING -> Triple(WarningAmberBg, WarningAmberText, "$daysLeft gün kaldı")
     ExpiryStatus.SAFE -> Triple(SafeGreenBg, SafeGreenText, "$daysLeft gün kaldı")
   }
@@ -57,10 +65,11 @@ fun ProductCard(
   Card(
     modifier = modifier
       .fillMaxWidth()
-      .padding(horizontal = 16.dp, vertical = 8.dp),
+      .padding(horizontal = 16.dp, vertical = 6.dp)
+      .semantics { contentDescription = "${product.name}, ${product.category}, $statusLabel" },
     shape = RoundedCornerShape(20.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    colors = CardDefaults.cardColors(containerColor = Color.White),
+    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
   ) {
     Column(
       modifier = Modifier
@@ -70,35 +79,41 @@ fun ProductCard(
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Top
       ) {
         Row(
-          verticalAlignment = Alignment.CenterVertically,
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.Top,
           horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
           Box(
             modifier = Modifier
               .size(44.dp)
               .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+              .background(Color(0xFF00C7BE).copy(alpha = 0.14f)),
             contentAlignment = Alignment.Center
           ) {
             Icon(
               imageVector = categoryIcon,
               contentDescription = product.category,
-              tint = MaterialTheme.colorScheme.primary
+              tint = Color(0xFF0D9488)
             )
           }
 
-          Column {
+          Column(modifier = Modifier.weight(1f)) {
             Text(
               text = product.name,
               fontWeight = FontWeight.Bold,
               fontSize = 16.sp,
-              color = MaterialTheme.colorScheme.onSurface
+              color = Color(0xFF1C1C1E),
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.height(2.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(modifier = Modifier.height(6.dp))
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
               BadgeText(text = product.category)
               BadgeText(text = product.storageLocation)
               BadgeText(text = product.familyMember)
@@ -106,18 +121,21 @@ fun ProductCard(
           }
         }
 
+        Spacer(modifier = Modifier.width(8.dp))
+
         // Status Badge
         Box(
           modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(statusBg)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
         ) {
           Text(
             text = statusLabel,
             color = statusText,
             fontSize = 12.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
           )
         }
       }
@@ -127,13 +145,16 @@ fun ProductCard(
         Text(
           text = product.notes,
           fontSize = 13.sp,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
+          color = Color(0xFF4B5563),
+          maxLines = 3,
+          overflow = TextOverflow.Ellipsis,
+          lineHeight = 18.sp
         )
       }
 
       Spacer(modifier = Modifier.height(12.dp))
-      Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-      Spacer(modifier = Modifier.height(8.dp))
+      HorizontalDivider(color = Color(0xFFF2F2F7))
+      Spacer(modifier = Modifier.height(6.dp))
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -143,27 +164,59 @@ fun ProductCard(
         Text(
           text = "Son Tarih: $effectiveExpiry",
           fontSize = 12.sp,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
+          fontWeight = FontWeight.Medium,
+          color = Color(0xFF6B7280),
+          modifier = Modifier.weight(1f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
           if (!product.isOpened) {
             TextButton(
               onClick = { onOpenToday(product) },
+              modifier = Modifier
+                .pressClickEffect()
+                .semantics { contentDescription = "${product.name} ürününü bugün açtım olarak işaretle" },
               contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) {
               Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
               Spacer(modifier = Modifier.width(4.dp))
-              Text("Bugün Açtım", fontSize = 12.sp)
+              Text("Bugün Açtım", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
           }
 
-          IconButton(onClick = { onEdit(product) }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.Edit, contentDescription = "Düzenle", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.secondary)
+          IconButton(
+            onClick = { onEdit(product) },
+            modifier = Modifier
+              .size(48.dp)
+              .pressClickEffect()
+              .semantics { contentDescription = "${product.name} ürününü düzenle" }
+          ) {
+            Icon(
+              Icons.Default.Edit,
+              contentDescription = "Düzenle",
+              modifier = Modifier.size(20.dp),
+              tint = Color(0xFF007AFF)
+            )
           }
 
-          IconButton(onClick = { onDelete(product) }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.Delete, contentDescription = "Sil", modifier = Modifier.size(18.dp), tint = DangerRedText)
+          IconButton(
+            onClick = { onDelete(product) },
+            modifier = Modifier
+              .size(48.dp)
+              .pressClickEffect()
+              .semantics { contentDescription = "${product.name} ürününü sil" }
+          ) {
+            Icon(
+              Icons.Default.Delete,
+              contentDescription = "Sil",
+              modifier = Modifier.size(20.dp),
+              tint = DangerRedText
+            )
           }
         }
       }
@@ -176,14 +229,16 @@ fun BadgeText(text: String) {
   Box(
     modifier = Modifier
       .clip(RoundedCornerShape(6.dp))
-      .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
-      .padding(horizontal = 6.dp, vertical = 2.dp)
+      .background(Color(0xFFF2F2F7))
+      .padding(horizontal = 7.dp, vertical = 3.dp)
   ) {
     Text(
       text = text,
-      fontSize = 10.sp,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-      fontWeight = FontWeight.Medium
+      fontSize = 11.sp,
+      color = Color(0xFF3A3A3C),
+      fontWeight = FontWeight.Medium,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis
     )
   }
 }

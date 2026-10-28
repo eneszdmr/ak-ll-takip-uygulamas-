@@ -47,6 +47,7 @@ fun AddEditVehicleInsuranceScreen(
   }
   var notes by remember { mutableStateOf(vehicleToEdit?.notes ?: "") }
   var errorMessage by remember { mutableStateOf<String?>(null) }
+  var isSubmitting by remember { mutableStateOf(false) }
 
   var reminderEnabled by remember { mutableStateOf(true) }
   var reminderDaysBefore by remember { mutableIntStateOf(14) }
@@ -67,11 +68,12 @@ fun AddEditVehicleInsuranceScreen(
       TopAppBar(
         title = {
           Text(
-            if (vehicleToEdit == null) "Yeni Araç / Sigorta Ekle" else "Araç / Sigorta Düzenle"
+            if (vehicleToEdit == null) "Yeni Araç / Sigorta Ekle" else "Araç / Sigorta Düzenle",
+            fontWeight = FontWeight.Bold
           )
         },
         navigationIcon = {
-          IconButton(onClick = onBack) {
+          IconButton(onClick = { if (!isSubmitting) onBack() }) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
           }
         }
@@ -82,6 +84,7 @@ fun AddEditVehicleInsuranceScreen(
       modifier = Modifier
         .fillMaxSize()
         .padding(padding)
+        .imePadding()
         .verticalScroll(rememberScrollState())
         .padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -168,6 +171,7 @@ fun AddEditVehicleInsuranceScreen(
 
       Button(
         onClick = {
+          if (isSubmitting) return@Button
           if (plateAndVehicle.isBlank()) {
             errorMessage = "Plaka ve araç bilgisi boş olamaz."
             return@Button
@@ -180,6 +184,8 @@ fun AddEditVehicleInsuranceScreen(
             return@Button
           }
 
+          isSubmitting = true
+          errorMessage = null
           onSave(
             plateAndVehicle.trim(),
             policyType,
@@ -193,13 +199,20 @@ fun AddEditVehicleInsuranceScreen(
             reminderSound
           )
         },
+        enabled = !isSubmitting,
         modifier = Modifier
           .fillMaxWidth()
-          .height(50.dp)
+          .height(52.dp)
           .testTag("save_vehicle_button"),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(14.dp)
       ) {
-        Text("Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        if (isSubmitting) {
+          CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Kaydediliyor...", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        } else {
+          Text("Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
       }
     }
   }

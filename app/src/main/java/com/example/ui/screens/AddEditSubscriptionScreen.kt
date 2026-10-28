@@ -52,6 +52,7 @@ fun AddEditSubscriptionScreen(
   var autoRenew by remember { mutableStateOf(subscriptionToEdit?.autoRenew ?: true) }
   var notes by remember { mutableStateOf(subscriptionToEdit?.notes ?: "") }
   var errorMessage by remember { mutableStateOf<String?>(null) }
+  var isSubmitting by remember { mutableStateOf(false) }
 
   var reminderEnabled by remember { mutableStateOf(true) }
   var reminderDaysBefore by remember { mutableIntStateOf(7) }
@@ -72,10 +73,10 @@ fun AddEditSubscriptionScreen(
     topBar = {
       TopAppBar(
         title = {
-          Text(if (subscriptionToEdit == null) "Yeni Abonelik Ekle" else "Aboneliği Düzenle")
+          Text(if (subscriptionToEdit == null) "Yeni Abonelik Ekle" else "Aboneliği Düzenle", fontWeight = FontWeight.Bold)
         },
         navigationIcon = {
-          IconButton(onClick = onBack) {
+          IconButton(onClick = { if (!isSubmitting) onBack() }) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
           }
         }
@@ -86,6 +87,7 @@ fun AddEditSubscriptionScreen(
       modifier = Modifier
         .fillMaxSize()
         .padding(padding)
+        .imePadding()
         .verticalScroll(rememberScrollState())
         .padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -183,6 +185,7 @@ fun AddEditSubscriptionScreen(
 
       Button(
         onClick = {
+          if (isSubmitting) return@Button
           if (name.isBlank()) {
             errorMessage = "Abonelik adı boş olamaz."
             return@Button
@@ -193,6 +196,8 @@ fun AddEditSubscriptionScreen(
             errorMessage = "Geçersiz tarih formatı (YYYY-MM-DD olmalı)."
             return@Button
           }
+          isSubmitting = true
+          errorMessage = null
           onSave(
             name.trim(),
             category,
@@ -207,13 +212,20 @@ fun AddEditSubscriptionScreen(
             reminderSound
           )
         },
+        enabled = !isSubmitting,
         modifier = Modifier
           .fillMaxWidth()
-          .height(50.dp)
+          .height(52.dp)
           .testTag("save_subscription_button"),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(14.dp)
       ) {
-        Text("Aboneliği Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        if (isSubmitting) {
+          CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Kaydediliyor...", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        } else {
+          Text("Aboneliği Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
       }
     }
   }

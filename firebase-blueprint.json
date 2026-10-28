@@ -1,0 +1,56 @@
+{
+  "entities": {
+    "RecoveryProfile": {
+      "title": "RecoveryProfile",
+      "description": "Stores authenticated user hybrid password recovery metadata linked to a Turkish phone number and Google account.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The Firebase Authentication UID of the account owner."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Normalized 10-digit Turkish phone number associated with the MariaDB account."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified Google account email address used for hybrid password recovery."
+        },
+        "securityQuestion": {
+          "type": "string",
+          "description": "Selected security question for hybrid password recovery."
+        },
+        "recoveryCodeHint": {
+          "type": "string",
+          "description": "Masked hint for the user's backup recovery code."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp populated via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp populated via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "phoneNumber",
+        "email",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/recovery_profiles/{userId}": {
+      "schema": {
+        "$ref": "#/entities/RecoveryProfile"
+      },
+      "description": "Per-user hybrid recovery profile document keyed by the authenticated Firebase UID."
+    }
+  }
+}

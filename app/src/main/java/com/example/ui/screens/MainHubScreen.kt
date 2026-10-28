@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -20,11 +19,24 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.example.data.model.UserSecuritySummary
+import com.example.ui.components.AppBrandIconBadge
 import com.example.ui.components.DatabaseConnectionTester
+import com.example.ui.components.SecuritySettingsDialog
+import com.example.ui.components.SkeletonLoadingList
+import com.example.ui.components.pressClickEffect
 import com.example.ui.viewmodel.ProductStats
+import com.example.utils.SessionManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,16 +50,29 @@ fun MainHubScreen(
   totalVehicles: Int = 0,
   expiringVehicles: Int = 0,
   activeRemindersCount: Int = 0,
+  userSecuritySummary: UserSecuritySummary? = null,
+  isInitialLoading: Boolean = false,
+  isSyncing: Boolean = false,
+  onRefresh: () -> Unit = {},
   onOpenEczaTakip: () -> Unit,
   onOpenGarantiTakip: () -> Unit,
   onOpenAbonelikTakip: () -> Unit = {},
   onOpenAracTakip: () -> Unit = {},
   onOpenNotifications: () -> Unit = {},
+  onSaveRecoverySettings: suspend (
+    recoveryEmail: String?,
+    firebaseUid: String?,
+    securityQuestion: String?,
+    securityAnswerRaw: String?,
+    rawRecoveryCode: String?
+  ) -> Pair<Boolean, String?> = { _, _, _, _, _ -> false to null },
   onLogout: () -> Unit
 ) {
   val iosBackground = Color(0xFFF2F2F7)
   val iosLabelPrimary = Color(0xFF1C1C1E)
   val iosLabelSecondary = Color(0xFF8E8E93)
+  val formattedPhone = SessionManager.formatDisplayPhone(userPhone)
+  var showSecuritySettingsDialog by remember { mutableStateOf(false) }
 
   Scaffold(
     containerColor = iosBackground,
@@ -55,40 +80,55 @@ fun MainHubScreen(
       TopAppBar(
         title = {
           Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-              modifier = Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF007AFF).copy(alpha = 0.14f)),
-              contentAlignment = Alignment.Center
-            ) {
-              Icon(
-                Icons.Default.Person,
-                contentDescription = null,
-                tint = Color(0xFF007AFF),
-                modifier = Modifier.size(18.dp)
-              )
-            }
+            AppBrandIconBadge(size = 38.dp, cornerRadius = 11.dp)
             Spacer(modifier = Modifier.width(10.dp))
             Column {
               Text(
                 text = "Akıllı Takip Merkezi",
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp,
-                color = iosLabelPrimary
+                color = iosLabelPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
               Text(
-                text = userPhone,
+                text = if (formattedPhone.isNotBlank()) "+90 $formattedPhone" else userPhone,
                 fontSize = 11.sp,
-                color = iosLabelSecondary
+                color = iosLabelSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
             }
           }
         },
         actions = {
           IconButton(
+            onClick = onRefresh,
+            modifier = Modifier
+              .pressClickEffect()
+              .semantics { contentDescription = "Verileri Senkronize Et" }
+          ) {
+            if (isSyncing) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = Color(0xFF007AFF)
+              )
+            } else {
+              Icon(
+                imageVector = Icons.Default.Sync,
+                contentDescription = "Verileri Senkronize Et",
+                tint = Color(0xFF007AFF)
+              )
+            }
+          }
+
+          IconButton(
             onClick = onOpenNotifications,
-            modifier = Modifier.testTag("top_notifications_button")
+            modifier = Modifier
+              .pressClickEffect()
+              .testTag("top_notifications_button")
+              .semantics { contentDescription = "Bildirim ve Alarm Merkezi" }
           ) {
             BadgedBox(
               badge = {
@@ -109,7 +149,10 @@ fun MainHubScreen(
 
           TextButton(
             onClick = onLogout,
-            modifier = Modifier.testTag("logout_button")
+            modifier = Modifier
+              .pressClickEffect()
+              .testTag("logout_button")
+              .semantics { contentDescription = "Hesaptan Çıkış Yap" }
           ) {
             Icon(
               imageVector = Icons.AutoMirrored.Filled.Logout,
@@ -119,7 +162,7 @@ fun MainHubScreen(
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
-              text = "Çıkış Yap",
+              text = "Çıkış",
               color = Color(0xFFFF3B30),
               fontSize = 13.sp,
               fontWeight = FontWeight.SemiBold
@@ -130,161 +173,203 @@ fun MainHubScreen(
       )
     }
   ) { padding ->
-    Column(
+    Box(
       modifier = Modifier
         .fillMaxSize()
-        .padding(padding)
-        .verticalScroll(rememberScrollState())
-        .padding(horizontal = 18.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(16.dp)
+        .padding(padding),
+      contentAlignment = Alignment.TopCenter
     ) {
-      // Apple iOS Health-style Large Title & Compact DB Status Pill
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Text(
-          text = "Özet",
-          fontSize = 32.sp,
-          fontWeight = FontWeight.ExtraBold,
-          color = iosLabelPrimary
-        )
-        DatabaseConnectionTester()
-      }
-
-      // Apple-style Notification & Alarm Studio Hero Card
-      Card(
+      Column(
         modifier = Modifier
+          .widthIn(max = 680.dp)
           .fillMaxWidth()
-          .clip(RoundedCornerShape(22.dp))
-          .clickable(onClick = onOpenNotifications)
-          .testTag("module_notifications_center"),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
       ) {
-        Box(
+        // Apple iOS Health-style Large Title & Compact DB Status Pill
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Text(
+            text = "Özet",
+            fontSize = 30.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = iosLabelPrimary
+          )
+          DatabaseConnectionTester()
+        }
+
+        // Apple-style Notification & Alarm Studio Hero Card
+        Card(
           modifier = Modifier
             .fillMaxWidth()
-            .background(
-              Brush.linearGradient(
-                colors = listOf(Color(0xFF1C1C1E), Color(0xFF2C2C2E))
-              )
-            )
-            .padding(18.dp)
+            .pressClickEffect()
+            .clip(RoundedCornerShape(22.dp))
+            .clickable(onClick = onOpenNotifications)
+            .testTag("module_notifications_center")
+            .semantics { contentDescription = "Bildirim ve Alarm Merkezi Modülü" },
+          shape = RoundedCornerShape(22.dp),
+          colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+          elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .background(
+                Brush.linearGradient(
+                  colors = listOf(Color(0xFF1C1C1E), Color(0xFF2C2C2E))
+                )
+              )
+              .padding(18.dp)
           ) {
             Row(
+              modifier = Modifier.fillMaxWidth(),
               verticalAlignment = Alignment.CenterVertically,
-              modifier = Modifier.weight(1f)
+              horizontalArrangement = Arrangement.SpaceBetween
             ) {
-              Box(
-                modifier = Modifier
-                  .size(46.dp)
-                  .clip(RoundedCornerShape(14.dp))
-                  .background(Color(0xFFFF2D55)),
-                contentAlignment = Alignment.Center
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
               ) {
-                Icon(
-                  imageVector = Icons.Default.NotificationsActive,
-                  contentDescription = null,
-                  tint = Color.White,
-                  modifier = Modifier.size(24.dp)
-                )
+                Box(
+                  modifier = Modifier
+                    .size(46.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFFFF2D55)),
+                  contentAlignment = Alignment.Center
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.NotificationsActive,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp)
+                  )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = "Bildirim & Alarm Merkezi",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                  Spacer(modifier = Modifier.height(3.dp))
+                  Text(
+                    text = "Her ürüne özel 1 Gün, 1 Hafta, 2 Hafta, 1 Ay önceden müzikli ve saatli bildirim kurun",
+                    color = Color(0xFFD1D1D6),
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                }
               }
-              Spacer(modifier = Modifier.width(14.dp))
-              Column {
-                Text(
-                  text = "Bildirim & Alarm Merkezi",
-                  color = Color.White,
-                  fontWeight = FontWeight.Bold,
-                  fontSize = 17.sp
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                  text = "Her ürüne özel 1 Gün, 1 Hafta, 2 Hafta, 1 Ay önceden müzikli ve saatli bildirim kurun",
-                  color = Color(0xFFD1D1D6),
-                  fontSize = 12.sp,
-                  lineHeight = 16.sp
-                )
-              }
+              Spacer(modifier = Modifier.width(8.dp))
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                contentDescription = "Aç",
+                tint = Color(0xFF8E8E93),
+                modifier = Modifier.size(16.dp)
+              )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
-              contentDescription = "Aç",
-              tint = Color(0xFF8E8E93),
-              modifier = Modifier.size(16.dp)
-            )
           }
         }
+
+        Text(
+          text = "Aktif Takip Modülleri",
+          fontSize = 18.sp,
+          fontWeight = FontWeight.Bold,
+          color = iosLabelPrimary
+        )
+
+        if (isInitialLoading) {
+          SkeletonLoadingList(count = 3)
+        } else {
+          // Module 1: Ecza & Kozmetik Takip (Apple Teal #00C7BE)
+          AppleModuleCard(
+            title = "Ecza & Kozmetik Takip",
+            subtitle = "İlaç, şurup, güneş kremi ve bakım ürünlerinin İTS karekod, SKT ve PAO takibi",
+            icon = Icons.Default.MedicalServices,
+            squircleColor = Color(0xFF00C7BE),
+            badge1Text = "${productStats.total} Ürün",
+            badge2Text = if (productStats.critical > 0) "${productStats.critical} Kritik SKT" else "${productStats.safe} Güvenli",
+            badge2Critical = productStats.critical > 0,
+            testTag = "module_ecza_takip",
+            onClick = onOpenEczaTakip
+          )
+
+          // Module 2: Garanti & Fatura Takip (Apple Blue #007AFF)
+          AppleModuleCard(
+            title = "Garanti & Fatura Takip",
+            subtitle = "Elektronik, beyaz eşya ve ev cihazlarının garanti bitiş ve fatura takibi",
+            icon = Icons.Default.VerifiedUser,
+            squircleColor = Color(0xFF007AFF),
+            badge1Text = "$totalWarranties Cihaz",
+            badge2Text = if (expiringWarranties > 0) "$expiringWarranties Yaklaşan" else "Tümü Aktif",
+            badge2Critical = expiringWarranties > 0,
+            testTag = "module_garanti_takip",
+            onClick = onOpenGarantiTakip
+          )
+
+          // Module 3: Abonelik & Fatura Takip (Apple Indigo #5856D6)
+          AppleModuleCard(
+            title = "Abonelik & Fatura Takip",
+            subtitle = "Dijital platformlar, internet ve aylık/yıllık düzenli ödemelerin takibi",
+            icon = Icons.Default.Autorenew,
+            squircleColor = Color(0xFF5856D6),
+            badge1Text = "$totalSubscriptions Abonelik",
+            badge2Text = "₺${"%.0f".format(totalMonthlyCost)} / Ay",
+            badge2Critical = false,
+            testTag = "module_abonelik_takip",
+            onClick = onOpenAbonelikTakip
+          )
+
+          // Module 4: Araç & Sigorta Takip (Apple Orange #FF9500)
+          AppleModuleCard(
+            title = "Araç & Sigorta Takip",
+            subtitle = "Trafik sigortası, kasko, TÜVTÜRK muayene ve periyodik bakım takibi",
+            icon = Icons.Default.DirectionsCar,
+            squircleColor = Color(0xFFFF9500),
+            badge1Text = "$totalVehicles Kayıt",
+            badge2Text = if (expiringVehicles > 0) "$expiringVehicles Yaklaşan" else "Tümü Güncel",
+            badge2Critical = expiringVehicles > 0,
+            testTag = "module_arac_takip",
+            onClick = onOpenAracTakip
+          )
+
+          // Hybrid Password Recovery & Account Security Card
+          val hasEmail = !userSecuritySummary?.recoveryEmail.isNullOrBlank()
+          val hasQuestion = userSecuritySummary?.hasSecurityAnswer == true
+          val hasCode = userSecuritySummary?.hasRecoveryCode == true
+          AppleModuleCard(
+            title = "Hibrit Şifre Kurtarma & Güvenlik",
+            subtitle = "Şifrenizi unuttuğunuzda Firebase E-posta, Güvenlik Sorusu veya Kurtarma Kodu ile sıfırlama ayarları",
+            icon = Icons.Default.Security,
+            squircleColor = Color(0xFF34C759),
+            badge1Text = if (hasEmail) "E-posta Bağlı" else "E-posta Bağla",
+            badge2Text = if (hasQuestion || hasCode) "Kurtarma Aktif" else "Güvenlik Sorusu Tanımla",
+            badge2Critical = !hasEmail && !hasQuestion && !hasCode,
+            testTag = "open_security_settings_button",
+            onClick = { showSecuritySettingsDialog = true }
+          )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
       }
 
-      Text(
-        text = "Aktif Takip Modülleri",
-        fontSize = 19.sp,
-        fontWeight = FontWeight.Bold,
-        color = iosLabelPrimary
-      )
-
-      // Module 1: Ecza & Kozmetik Takip (Apple Teal #00C7BE)
-      AppleModuleCard(
-        title = "Ecza & Kozmetik Takip",
-        subtitle = "İlaç, şurup, güneş kremi ve bakım ürünlerinin İTS karekod, SKT ve PAO takibi",
-        icon = Icons.Default.MedicalServices,
-        squircleColor = Color(0xFF00C7BE),
-        badge1Text = "${productStats.total} Ürün",
-        badge2Text = if (productStats.critical > 0) "${productStats.critical} Kritik SKT" else "${productStats.safe} Güvenli",
-        badge2Critical = productStats.critical > 0,
-        testTag = "module_ecza_takip",
-        onClick = onOpenEczaTakip
-      )
-
-      // Module 2: Garanti & Fatura Takip (Apple Blue #007AFF)
-      AppleModuleCard(
-        title = "Garanti & Fatura Takip",
-        subtitle = "Elektronik, beyaz eşya ve ev cihazlarının garanti bitiş ve fatura takibi",
-        icon = Icons.Default.VerifiedUser,
-        squircleColor = Color(0xFF007AFF),
-        badge1Text = "$totalWarranties Cihaz",
-        badge2Text = if (expiringWarranties > 0) "$expiringWarranties Yaklaşan" else "Tümü Aktif",
-        badge2Critical = expiringWarranties > 0,
-        testTag = "module_garanti_takip",
-        onClick = onOpenGarantiTakip
-      )
-
-      // Module 3: Abonelik & Fatura Takip (Apple Indigo #5856D6)
-      AppleModuleCard(
-        title = "Abonelik & Fatura Takip",
-        subtitle = "Dijital platformlar, internet ve aylık/yıllık düzenli ödemelerin takibi",
-        icon = Icons.Default.Autorenew,
-        squircleColor = Color(0xFF5856D6),
-        badge1Text = "$totalSubscriptions Abonelik",
-        badge2Text = "₺${"%.0f".format(totalMonthlyCost)} / Ay",
-        badge2Critical = false,
-        testTag = "module_abonelik_takip",
-        onClick = onOpenAbonelikTakip
-      )
-
-      // Module 4: Araç & Sigorta Takip (Apple Orange #FF9500)
-      AppleModuleCard(
-        title = "Araç & Sigorta Takip",
-        subtitle = "Trafik sigortası, kasko, TÜVTÜRK muayene ve periyodik bakım takibi",
-        icon = Icons.Default.DirectionsCar,
-        squircleColor = Color(0xFFFF9500),
-        badge1Text = "$totalVehicles Kayıt",
-        badge2Text = if (expiringVehicles > 0) "$expiringVehicles Yaklaşan" else "Tümü Güncel",
-        badge2Critical = expiringVehicles > 0,
-        testTag = "module_arac_takip",
-        onClick = onOpenAracTakip
-      )
-
-      Spacer(modifier = Modifier.height(16.dp))
+      if (showSecuritySettingsDialog) {
+        SecuritySettingsDialog(
+          userPhone = userPhone,
+          initialSummary = userSecuritySummary,
+          onDismiss = { showSecuritySettingsDialog = false },
+          onSaveRecoverySettings = onSaveRecoverySettings
+        )
+      }
     }
   }
 }
@@ -304,9 +389,11 @@ private fun AppleModuleCard(
   Card(
     modifier = Modifier
       .fillMaxWidth()
+      .pressClickEffect()
       .clip(RoundedCornerShape(22.dp))
       .clickable(onClick = onClick)
-      .testTag(testTag),
+      .testTag(testTag)
+      .semantics { contentDescription = "$title, $badge1Text, $badge2Text" },
     shape = RoundedCornerShape(22.dp),
     colors = CardDefaults.cardColors(containerColor = Color.White),
     elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
@@ -321,7 +408,6 @@ private fun AppleModuleCard(
           verticalAlignment = Alignment.CenterVertically,
           modifier = Modifier.weight(1f)
         ) {
-          // Apple iOS Squircle Icon Badge
           Box(
             modifier = Modifier
               .size(48.dp)
@@ -337,26 +423,30 @@ private fun AppleModuleCard(
             )
           }
           Spacer(modifier = Modifier.width(14.dp))
-          Column {
+          Column(modifier = Modifier.weight(1f)) {
             Text(
               text = title,
               fontSize = 17.sp,
               fontWeight = FontWeight.Bold,
-              color = Color(0xFF1C1C1E)
+              color = Color(0xFF1C1C1E),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
             )
             Spacer(modifier = Modifier.height(3.dp))
             Text(
               text = subtitle,
               fontSize = 12.sp,
               color = Color(0xFF8E8E93),
-              lineHeight = 16.sp
+              lineHeight = 16.sp,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis
             )
           }
         }
         Spacer(modifier = Modifier.width(8.dp))
         Icon(
           imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
-          contentDescription = "Aç",
+          contentDescription = "Modülü Aç",
           tint = Color(0xFFC7C7CC),
           modifier = Modifier.size(16.dp)
         )
@@ -380,6 +470,7 @@ private fun AppleModuleCard(
             color = squircleColor,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
           )
         }
@@ -393,6 +484,7 @@ private fun AppleModuleCard(
             color = if (badge2Critical) Color(0xFFFF3B30) else Color(0xFF28CD41),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
           )
         }

@@ -143,5 +143,18 @@ class MariaDBLiveIntegrationTest {
     assertEquals("2027-11-15", OCRParser.parseExpiryFromOCR("S.K.T 15.11.2027"))
     assertEquals("2029-12-31", OCRParser.parseExpiryFromOCR("12/2029"))
     assertEquals("2028-05-20", OCRParser.parseExpiryFromOCR("20.05.2028"))
+
+    // 10. Test Phone Masking / Canonical Normalization & Multi-Device Sync
+    assertEquals("5071231212", SessionManager.normalizePhone("0507 123 12 12"))
+    assertEquals("5071231212", SessionManager.normalizePhone("(507) 123 12 12"))
+    assertEquals("5071231212", SessionManager.normalizePhone("+90 507 123 12 12"))
+    assertEquals("(507) 123 12 12", SessionManager.formatDisplayPhone("05071231212"))
+
+    // Verify querying with canonical 10-digit '5551234567' returns the exact same products as '05551234567'
+    val syncedProductsFromSecondDevice = repository.getProducts("5551234567")
+    assertTrue(
+      "Second device logged in with 10-digit phone must see products immediately",
+      syncedProductsFromSecondDevice.isNotEmpty()
+    )
   }
 }

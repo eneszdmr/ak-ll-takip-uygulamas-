@@ -74,6 +74,7 @@ fun AddEditProductScreen(
 
   var errorMessage by remember { mutableStateOf<String?>(null) }
   var successMessage by remember { mutableStateOf<String?>(null) }
+  var isSubmitting by remember { mutableStateOf(false) }
 
   // Step-by-step live camera scanner state
   var activeScannerStep by remember { mutableStateOf<ScanStep?>(null) }
@@ -128,25 +129,34 @@ fun AddEditProductScreen(
   }
 
   Scaffold(
+    containerColor = Color(0xFFF2F2F7),
     topBar = {
       TopAppBar(
-        title = { Text(if (productToEdit == null) "Yeni Ürün Ekle" else "Ürünü Düzenle") },
+        title = { Text(if (productToEdit == null) "Yeni Ürün Ekle" else "Ürünü Düzenle", fontWeight = FontWeight.Bold) },
         navigationIcon = {
-          IconButton(onClick = onBack) {
+          IconButton(onClick = { if (!isSubmitting) onBack() }) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
           }
-        }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFFF2F2F7))
       )
     }
   ) { padding ->
-    Column(
+    Box(
       modifier = Modifier
         .fillMaxSize()
         .padding(padding)
-        .verticalScroll(rememberScrollState())
-        .padding(16.dp),
-      verticalArrangement = Arrangement.spacedBy(16.dp)
+        .imePadding(),
+      contentAlignment = Alignment.TopCenter
     ) {
+      Column(
+        modifier = Modifier
+          .widthIn(max = 680.dp)
+          .fillMaxSize()
+          .verticalScroll(rememberScrollState())
+          .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+      ) {
       if (errorMessage != null) {
         Surface(
           color = MaterialTheme.colorScheme.errorContainer,
@@ -380,6 +390,7 @@ fun AddEditProductScreen(
 
       Button(
         onClick = {
+          if (isSubmitting) return@Button
           if (name.isBlank()) {
             errorMessage = "Ürün adı boş olamaz."
             return@Button
@@ -391,6 +402,8 @@ fun AddEditProductScreen(
             return@Button
           }
 
+          isSubmitting = true
+          errorMessage = null
           val parsedPao = paoMonths.toIntOrNull()
           onSaveReminderConfig(reminderEnabled, reminderDaysBefore, reminderTime, reminderSound)
           onSave(
@@ -405,13 +418,25 @@ fun AddEditProductScreen(
             isOpened
           )
         },
+        enabled = !isSubmitting,
         modifier = Modifier
           .fillMaxWidth()
-          .height(50.dp)
+          .height(52.dp)
           .testTag("save_product_button"),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(14.dp)
       ) {
-        Text("Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        if (isSubmitting) {
+          CircularProgressIndicator(
+            modifier = Modifier.size(20.dp),
+            color = Color.White,
+            strokeWidth = 2.dp
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Kaydediliyor...", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        } else {
+          Text("Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+      }
       }
     }
   }

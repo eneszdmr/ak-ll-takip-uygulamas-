@@ -57,6 +57,7 @@ fun AddEditWarrantyScreen(
   var storeInvoice by remember { mutableStateOf(warrantyToEdit?.storeInvoice ?: "") }
   var notes by remember { mutableStateOf(warrantyToEdit?.notes ?: "") }
   var errorMessage by remember { mutableStateOf<String?>(null) }
+  var isSubmitting by remember { mutableStateOf(false) }
 
   var reminderEnabled by remember { mutableStateOf(true) }
   var reminderDaysBefore by remember { mutableIntStateOf(14) }
@@ -84,9 +85,9 @@ fun AddEditWarrantyScreen(
   Scaffold(
     topBar = {
       TopAppBar(
-        title = { Text(if (warrantyToEdit == null) "Yeni Garanti Ekle" else "Garantiyi Düzenle") },
+        title = { Text(if (warrantyToEdit == null) "Yeni Garanti Ekle" else "Garantiyi Düzenle", fontWeight = FontWeight.Bold) },
         navigationIcon = {
-          IconButton(onClick = onBack) {
+          IconButton(onClick = { if (!isSubmitting) onBack() }) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
           }
         }
@@ -97,6 +98,7 @@ fun AddEditWarrantyScreen(
       modifier = Modifier
         .fillMaxSize()
         .padding(padding)
+        .imePadding()
         .verticalScroll(rememberScrollState())
         .padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -205,6 +207,7 @@ fun AddEditWarrantyScreen(
 
       Button(
         onClick = {
+          if (isSubmitting) return@Button
           if (name.isBlank()) {
             errorMessage = "Cihaz / ürün adı boş olamaz."
             return@Button
@@ -217,6 +220,8 @@ fun AddEditWarrantyScreen(
             return@Button
           }
 
+          isSubmitting = true
+          errorMessage = null
           onSaveReminderConfig(reminderEnabled, reminderDaysBefore, reminderTime, reminderSound)
           onSave(
             name.trim(),
@@ -229,13 +234,20 @@ fun AddEditWarrantyScreen(
             notes.trim()
           )
         },
+        enabled = !isSubmitting,
         modifier = Modifier
           .fillMaxWidth()
-          .height(50.dp)
+          .height(52.dp)
           .testTag("save_warranty_button"),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(14.dp)
       ) {
-        Text("Garantiyi Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        if (isSubmitting) {
+          CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Kaydediliyor...", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        } else {
+          Text("Garantiyi Kaydet", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
       }
     }
   }

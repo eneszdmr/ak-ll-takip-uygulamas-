@@ -1,6 +1,6 @@
 {
-  "name": "Akıllı Ev Ecza & Bakım Takip",
-  "description": "Evdeki ilaçları, bakım ürünlerini ve güneş kremlerini son kullanma tarihleri ve PAO (açıldıktan sonra kullanım süresi) ile takip edin.",
+  "name": "Akıllı Takip Merkezi",
+  "description": "Ecza & Kozmetik, Garanti & Fatura, Abonelik ve Araç Sigorta takibini canlı İTS/SKT tarama ve özelleştirilebilir bildirimlerle tek merkezden yönetin.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

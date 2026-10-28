@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidRecoveryProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 10 && data.phoneNumber.size() <= 15 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+             (!('securityQuestion' in data) || data.securityQuestion == null || (data.securityQuestion is string && data.securityQuestion.size() <= 255)) &&
+             (!('recoveryCodeHint' in data) || data.recoveryCodeHint == null || (data.recoveryCodeHint is string && data.recoveryCodeHint.size() <= 64));
+    }
+
+    match /recovery_profiles/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().keys().hasAll(['userId', 'phoneNumber', 'email', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'phoneNumber', 'email', 'securityQuestion', 'recoveryCodeHint', 'createdAt', 'updatedAt']) &&
+                       isValidRecoveryProfile(incoming()) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       (!('updatedAt' in incoming()) || incoming().updatedAt == null || (incoming().updatedAt is timestamp && incoming().updatedAt <= request.time));
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidRecoveryProfile(incoming()) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (!('updatedAt' in incoming()) || incoming().updatedAt == null || (incoming().updatedAt is timestamp && incoming().updatedAt <= request.time)) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'email', 'securityQuestion', 'recoveryCodeHint', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+  }
+}

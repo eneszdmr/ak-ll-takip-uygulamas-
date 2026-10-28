@@ -5,6 +5,7 @@ import com.example.BuildConfig
 import com.example.data.model.ProductEntity
 import com.example.data.model.ProductReminderEntity
 import com.example.data.model.SubscriptionEntity
+import com.example.data.model.UserSecuritySummary
 import com.example.data.model.VehicleInsuranceEntity
 import com.example.data.model.WarrantyEntity
 import com.example.data.remote.MariaDBWireClient.Companion.sqlEscape
@@ -38,6 +39,13 @@ class MariaDBRepository {
 
   companion object {
     private const val TAG = "MariaDBRepository"
+    private fun safeLogError(msg: String, e: Throwable) {
+      try {
+        Log.e(TAG, msg, e)
+      } catch (_: Throwable) {
+        println("[$TAG] $msg: ${e.message}")
+      }
+    }
   }
 
   suspend fun testDbQueryDetailed(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
@@ -55,7 +63,7 @@ class MariaDBRepository {
         false to msg
       }
     } catch (e: Exception) {
-      Log.e(TAG, "MariaDB test query failed", e)
+      safeLogError("MariaDB test query failed", e)
       val msg = "Veritabanı bağlantısı kurulamadı"
       lastErrorMessage = e.message ?: msg
       false to msg
@@ -76,12 +84,36 @@ class MariaDBRepository {
         id INT AUTO_INCREMENT PRIMARY KEY,
         phone_number VARCHAR(20) NOT NULL UNIQUE,
         password_hash VARCHAR(255) NULL,
+        recovery_email VARCHAR(255) NULL,
+        firebase_uid VARCHAR(128) NULL,
+        security_question VARCHAR(255) NULL,
+        security_answer_hash VARCHAR(255) NULL,
+        recovery_code_hash VARCHAR(255) NULL,
+        recovery_code_hint VARCHAR(64) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
       """.trimIndent()
     )
     session.executeUpdate(
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255) NULL"
+    )
+    session.executeUpdate(
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_email VARCHAR(255) NULL"
+    )
+    session.executeUpdate(
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS firebase_uid VARCHAR(128) NULL"
+    )
+    session.executeUpdate(
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS security_question VARCHAR(255) NULL"
+    )
+    session.executeUpdate(
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS security_answer_hash VARCHAR(255) NULL"
+    )
+    session.executeUpdate(
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_code_hash VARCHAR(255) NULL"
+    )
+    session.executeUpdate(
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_code_hint VARCHAR(64) NULL"
     )
     session.executeUpdate(
       "ALTER TABLE users CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
@@ -210,11 +242,35 @@ class MariaDBRepository {
     schemaInitialized = true
   }
 
+  private fun canonicalPhone(raw: String): String {
+    val norm = SessionManager.normalizePhone(raw)
+    return norm.ifBlank { raw.trim() }
+  }
+
+  private fun phoneInClause(column: String, rawPhone: String): String {
+    val canonical = canonicalPhone(rawPhone)
+    val withZero = "0$canonical"
+    return "$column IN (${sqlEscape(canonical)}, ${sqlEscape(withZero)})"
+  }
+
+  private fun ensureUserRowInSession(session: MariaDBWireClient.Session, rawPhone: String): String {
+    val canonical = canonicalPhone(rawPhone)
+    val rows = session.executeQuery(
+      "SELECT phone_number FROM users WHERE ${phoneInClause("phone_number", canonical)} LIMIT 1"
+    )
+    return if (rows.isNotEmpty()) {
+      rows.first()["phone_number"] ?: canonical
+    } else {
+      session.executeUpdate("INSERT IGNORE INTO users (phone_number) VALUES (${sqlEscape(canonical)})")
+      canonical
+    }
+  }
+
   suspend fun authenticateOrRegisterUser(
     phoneNumber: String,
     rawPassword: String
   ): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
-    val cleanPhone = phoneNumber.trim()
+    val cleanPhone = canonicalPhone(phoneNumber)
     val hashedInput = SessionManager.hashPassword(rawPassword)
 
     try {
@@ -222,7 +278,7 @@ class MariaDBRepository {
         ensureTablesInSession(session)
 
         val rows = session.executeQuery(
-          "SELECT id, phone_number, password_hash FROM users WHERE phone_number = ${sqlEscape(cleanPhone)} LIMIT 1"
+          "SELECT id, phone_number, password_hash FROM users WHERE ${phoneInClause("phone_number", cleanPhone)} LIMIT 1"
         )
 
         if (rows.isEmpty()) {
@@ -232,10 +288,12 @@ class MariaDBRepository {
           lastErrorMessage = null
           true to null
         } else {
-          val existingHash = rows.first()["password_hash"]
+          val matchedRow = rows.first()
+          val existingHash = matchedRow["password_hash"]
+          val matchedPhone = matchedRow["phone_number"] ?: cleanPhone
           if (existingHash.isNullOrBlank()) {
             session.executeUpdate(
-              "UPDATE users SET password_hash = ${sqlEscape(hashedInput)} WHERE phone_number = ${sqlEscape(cleanPhone)}"
+              "UPDATE users SET password_hash = ${sqlEscape(hashedInput)}, phone_number = ${sqlEscape(cleanPhone)} WHERE phone_number = ${sqlEscape(matchedPhone)}"
             )
             lastErrorMessage = null
             true to null
@@ -243,32 +301,240 @@ class MariaDBRepository {
             lastErrorMessage = null
             true to null
           } else {
-            val err = "Girdiğiniz şifre bu telefon numarası için hatalı."
+            val err = "Girdiğiniz şifre bu telefon numarası için hatalı. Şifrenizi unuttuysanız aşağıdaki 'Şifremi Unuttum' seçeneğini kullanabilirsiniz."
             lastErrorMessage = err
             false to err
           }
         }
       }
     } catch (e: Exception) {
-      Log.e(TAG, "Error authenticating/registering user", e)
+      safeLogError("Error authenticating/registering user", e)
       val err = "Sunucu bağlantı hatası: ${e.message ?: "Bilinmeyen hata"}"
       lastErrorMessage = err
       false to err
     }
   }
 
+  suspend fun getUserSecuritySummary(phoneNumber: String): UserSecuritySummary? = withContext(Dispatchers.IO) {
+    val cleanPhone = canonicalPhone(phoneNumber)
+    if (cleanPhone.length < 10) return@withContext null
+    try {
+      client.withConnection { session ->
+        ensureTablesInSession(session)
+        val rows = session.executeQuery(
+          "SELECT phone_number, recovery_email, firebase_uid, security_question, " +
+            "security_answer_hash, recovery_code_hash, recovery_code_hint " +
+            "FROM users WHERE ${phoneInClause("phone_number", cleanPhone)} LIMIT 1"
+        )
+        val row = rows.firstOrNull() ?: return@withConnection null
+        UserSecuritySummary(
+          phoneNumber = cleanPhone,
+          recoveryEmail = row["recovery_email"]?.takeIf { it.isNotBlank() },
+          firebaseUid = row["firebase_uid"]?.takeIf { it.isNotBlank() },
+          securityQuestion = row["security_question"]?.takeIf { it.isNotBlank() },
+          hasSecurityAnswer = !row["security_answer_hash"].isNullOrBlank(),
+          hasRecoveryCode = !row["recovery_code_hash"].isNullOrBlank(),
+          recoveryCodeHint = row["recovery_code_hint"]?.takeIf { it.isNotBlank() }
+        )
+      }
+    } catch (e: Exception) {
+      safeLogError("Error fetching user security summary", e)
+      null
+    }
+  }
+
+  suspend fun saveUserRecoveryConfig(
+    phoneNumber: String,
+    recoveryEmail: String?,
+    firebaseUid: String?,
+    securityQuestion: String?,
+    securityAnswerRaw: String?,
+    rawRecoveryCode: String?
+  ): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
+    val cleanPhone = canonicalPhone(phoneNumber)
+    if (cleanPhone.length != 10) {
+      return@withContext false to "Geçerli bir 10 haneli telefon numarası gereklidir."
+    }
+    try {
+      client.withConnection { session ->
+        ensureTablesInSession(session)
+        val effectivePhone = ensureUserRowInSession(session, cleanPhone)
+        val updates = mutableListOf<String>()
+
+        if (!recoveryEmail.isNullOrBlank()) {
+          updates.add("recovery_email = ${sqlEscape(recoveryEmail.trim())}")
+        }
+        if (!firebaseUid.isNullOrBlank()) {
+          updates.add("firebase_uid = ${sqlEscape(firebaseUid.trim())}")
+        }
+        if (!securityQuestion.isNullOrBlank()) {
+          updates.add("security_question = ${sqlEscape(securityQuestion.trim())}")
+        }
+        if (!securityAnswerRaw.isNullOrBlank()) {
+          val answerHash = SessionManager.hashSecurityAnswer(securityAnswerRaw)
+          updates.add("security_answer_hash = ${sqlEscape(answerHash)}")
+        }
+        if (!rawRecoveryCode.isNullOrBlank()) {
+          val codeHash = SessionManager.hashRecoveryCode(rawRecoveryCode)
+          val codeHint = SessionManager.maskRecoveryCodeHint(rawRecoveryCode)
+          updates.add("recovery_code_hash = ${sqlEscape(codeHash)}")
+          updates.add("recovery_code_hint = ${sqlEscape(codeHint)}")
+        }
+
+        if (updates.isNotEmpty()) {
+          val sql = "UPDATE users SET ${updates.joinToString(", ")} WHERE phone_number = ${sqlEscape(effectivePhone)}"
+          session.executeUpdate(sql)
+        }
+        true to "Güvenlik ve şifre kurtarma ayarlarınız başarıyla kaydedildi."
+      }
+    } catch (e: Exception) {
+      safeLogError("Error saving user recovery config", e)
+      false to "Kurtarma ayarları kaydedilemedi: ${e.message ?: "Bilinmeyen hata"}"
+    }
+  }
+
+  suspend fun resetPasswordBySecurityAnswerOrCode(
+    phoneNumber: String,
+    securityAnswerRaw: String?,
+    recoveryCodeRaw: String?,
+    newRawPassword: String,
+    newSecurityQuestion: String? = null
+  ): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
+    val cleanPhone = canonicalPhone(phoneNumber)
+    if (cleanPhone.length != 10) {
+      return@withContext false to "Lütfen telefon numaranızı başında 0 olmadan 10 hane olarak giriniz."
+    }
+    if (newRawPassword.trim().length < 4) {
+      return@withContext false to "Yeni şifreniz en az 4 karakter olmalıdır."
+    }
+    val newPasswordHash = SessionManager.hashPassword(newRawPassword)
+
+    try {
+      client.withConnection { session ->
+        ensureTablesInSession(session)
+        val rows = session.executeQuery(
+          "SELECT phone_number, security_question, security_answer_hash, recovery_code_hash " +
+            "FROM users WHERE ${phoneInClause("phone_number", cleanPhone)} LIMIT 1"
+        )
+        if (rows.isEmpty()) {
+          return@withConnection false to "Bu telefon numarasına ait kayıtlı bir hesap bulunamadı."
+        }
+        val row = rows.first()
+        val matchedPhone = row["phone_number"] ?: cleanPhone
+        val storedAnswerHash = row["security_answer_hash"]?.takeIf { it.isNotBlank() }
+        val storedCodeHash = row["recovery_code_hash"]?.takeIf { it.isNotBlank() }
+
+        // If account has neither security answer nor recovery code configured yet (legacy user),
+        // allow setting security question + answer while resetting password so user isn't locked out.
+        if (storedAnswerHash == null && storedCodeHash == null) {
+          if (securityAnswerRaw.isNullOrBlank()) {
+            return@withConnection false to "Bu hesapta henüz güvenlik cevabı tanımlanmamış. Lütfen yeni bir güvenlik cevabı veya Google E-posta doğrulaması giriniz."
+          }
+          val newAnswerHash = SessionManager.hashSecurityAnswer(securityAnswerRaw)
+          val questionToSave = newSecurityQuestion?.takeIf { it.isNotBlank() } ?: "İlkokul öğretmeninizin adı nedir?"
+          session.executeUpdate(
+            "UPDATE users SET password_hash = ${sqlEscape(newPasswordHash)}, " +
+              "security_question = ${sqlEscape(questionToSave)}, " +
+              "security_answer_hash = ${sqlEscape(newAnswerHash)} " +
+              "WHERE phone_number = ${sqlEscape(matchedPhone)}"
+          )
+          return@withConnection true to "Şifreniz sıfırlandı ve güvenlik sorunuz tanımlandı!"
+        }
+
+        val answerMatched = !securityAnswerRaw.isNullOrBlank() &&
+          storedAnswerHash != null &&
+          storedAnswerHash.equals(SessionManager.hashSecurityAnswer(securityAnswerRaw), ignoreCase = true)
+
+        val codeMatched = !recoveryCodeRaw.isNullOrBlank() &&
+          storedCodeHash != null &&
+          storedCodeHash.equals(SessionManager.hashRecoveryCode(recoveryCodeRaw), ignoreCase = true)
+
+        if (!answerMatched && !codeMatched) {
+          return@withConnection false to "Girdiğiniz güvenlik cevabı veya kurtarma kodu doğrulanamadı."
+        }
+
+        session.executeUpdate(
+          "UPDATE users SET password_hash = ${sqlEscape(newPasswordHash)} WHERE phone_number = ${sqlEscape(matchedPhone)}"
+        )
+        true to "Şifreniz başarıyla sıfırlandı! Yeni şifrenizle giriş yapabilirsiniz."
+      }
+    } catch (e: Exception) {
+      safeLogError("Error resetting password with security answer/code", e)
+      false to "Şifre sıfırlama hatası: ${e.message ?: "Bağlantı kurulamadı"}"
+    }
+  }
+
+  suspend fun resetPasswordByVerifiedFirebaseAccount(
+    phoneNumber: String,
+    verifiedEmail: String,
+    firebaseUid: String,
+    newRawPassword: String,
+    firestoreLinkedPhone: String? = null
+  ): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
+    val cleanPhone = canonicalPhone(phoneNumber)
+    if (cleanPhone.length != 10) {
+      return@withContext false to "Lütfen 10 haneli telefon numaranızı giriniz."
+    }
+    if (newRawPassword.trim().length < 4) {
+      return@withContext false to "Yeni şifreniz en az 4 karakter olmalıdır."
+    }
+    val newPasswordHash = SessionManager.hashPassword(newRawPassword)
+
+    try {
+      client.withConnection { session ->
+        ensureTablesInSession(session)
+        val rows = session.executeQuery(
+          "SELECT phone_number, recovery_email, firebase_uid FROM users WHERE ${phoneInClause("phone_number", cleanPhone)} LIMIT 1"
+        )
+        if (rows.isEmpty()) {
+          // Create the user account with this verified Firebase identity and new password
+          session.executeUpdate(
+            "INSERT INTO users (phone_number, password_hash, recovery_email, firebase_uid) VALUES (" +
+              "${sqlEscape(cleanPhone)}, ${sqlEscape(newPasswordHash)}, ${sqlEscape(verifiedEmail.trim())}, ${sqlEscape(firebaseUid.trim())})"
+          )
+          return@withConnection true to "Firebase E-posta doğrulaması ile hesabınız ve yeni şifreniz oluşturuldu!"
+        }
+
+        val row = rows.first()
+        val matchedPhone = row["phone_number"] ?: cleanPhone
+        val existingEmail = row["recovery_email"]?.takeIf { it.isNotBlank() }
+        val existingUid = row["firebase_uid"]?.takeIf { it.isNotBlank() }
+
+        val emailMatches = existingEmail == null || existingEmail.equals(verifiedEmail.trim(), ignoreCase = true)
+        val uidMatches = existingUid == null || existingUid == firebaseUid.trim()
+        val firestorePhoneMatches = firestoreLinkedPhone != null && SessionManager.normalizePhone(firestoreLinkedPhone) == cleanPhone
+
+        if (!emailMatches && !uidMatches && !firestorePhoneMatches) {
+          return@withConnection false to "Bu telefon numarası farklı bir kurtarma e-postası ile eşleştirilmiş ($existingEmail)."
+        }
+
+        session.executeUpdate(
+          "UPDATE users SET password_hash = ${sqlEscape(newPasswordHash)}, " +
+            "recovery_email = ${sqlEscape(verifiedEmail.trim())}, " +
+            "firebase_uid = ${sqlEscape(firebaseUid.trim())} " +
+            "WHERE phone_number = ${sqlEscape(matchedPhone)}"
+        )
+        true to "Firebase / Google E-posta doğrulaması ile MariaDB şifreniz başarıyla sıfırlandı!"
+      }
+    } catch (e: Exception) {
+      safeLogError("Error resetting password with Firebase account", e)
+      false to "Şifre sıfırlama hatası: ${e.message ?: "Bağlantı kurulamadı"}"
+    }
+  }
+
   suspend fun ensureUserExists(phoneNumber: String): Boolean = withContext(Dispatchers.IO) {
+    val cleanPhone = canonicalPhone(phoneNumber)
     try {
       client.withConnection { session ->
         ensureTablesInSession(session)
         session.executeUpdate(
-          "INSERT IGNORE INTO users (phone_number) VALUES (${sqlEscape(phoneNumber.trim())})"
+          "INSERT IGNORE INTO users (phone_number) VALUES (${sqlEscape(cleanPhone)})"
         )
       }
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error ensuring user exists", e)
+      safeLogError("Error ensuring user exists", e)
       lastErrorMessage = e.message
       false
     }
@@ -284,8 +550,8 @@ class MariaDBRepository {
         session.executeQuery(
           "SELECT id, user_phone, name, category, storage_location, family_member, " +
             "expiry_date, opened_date, pao_months, notes, is_opened " +
-            "FROM products WHERE user_phone = ${sqlEscape(phoneNumber.trim())} " +
-            "ORDER BY expiry_date ASC"
+            "FROM products WHERE ${phoneInClause("user_phone", phoneNumber)} " +
+            "ORDER BY expiry_date ASC, id DESC"
         )
       }
       for (row in rows) {
@@ -308,7 +574,7 @@ class MariaDBRepository {
       }
       lastErrorMessage = null
     } catch (e: Exception) {
-      Log.e(TAG, "Error fetching products", e)
+      safeLogError("Error fetching products", e)
       lastErrorMessage = e.message
     }
     list
@@ -330,11 +596,12 @@ class MariaDBRepository {
 
       client.withConnection { session ->
         ensureTablesInSession(session)
+        val effectiveUserPhone = ensureUserRowInSession(session, phoneNumber)
         if (product.id == 0L) {
           val sql = "INSERT INTO products " +
             "(user_phone, name, category, storage_location, family_member, expiry_date, opened_date, pao_months, notes, is_opened) " +
             "VALUES (" +
-            "${sqlEscape(phoneNumber.trim())}, " +
+            "${sqlEscape(effectiveUserPhone)}, " +
             "${sqlEscape(product.name)}, " +
             "${sqlEscape(product.category)}, " +
             "${sqlEscape(product.storageLocation)}, " +
@@ -363,7 +630,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error saving product", e)
+      safeLogError("Error saving product", e)
       lastErrorMessage = e.message
       false
     }
@@ -378,7 +645,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error deleting product", e)
+      safeLogError("Error deleting product", e)
       lastErrorMessage = e.message
       false
     }
@@ -394,8 +661,8 @@ class MariaDBRepository {
         session.executeQuery(
           "SELECT id, user_phone, name, brand_model, category, purchase_date, " +
             "warranty_months, warranty_end_date, store_invoice, notes " +
-            "FROM warranties WHERE user_phone = ${sqlEscape(phoneNumber.trim())} " +
-            "ORDER BY warranty_end_date ASC"
+            "FROM warranties WHERE ${phoneInClause("user_phone", phoneNumber)} " +
+            "ORDER BY warranty_end_date ASC, id DESC"
         )
       }
       for (row in rows) {
@@ -415,7 +682,7 @@ class MariaDBRepository {
       }
       lastErrorMessage = null
     } catch (e: Exception) {
-      Log.e(TAG, "Error fetching warranties", e)
+      safeLogError("Error fetching warranties", e)
       lastErrorMessage = e.message
     }
     list
@@ -425,11 +692,12 @@ class MariaDBRepository {
     try {
       client.withConnection { session ->
         ensureTablesInSession(session)
+        val effectiveUserPhone = ensureUserRowInSession(session, phoneNumber)
         if (warranty.id == 0L) {
           val sql = "INSERT INTO warranties " +
             "(user_phone, name, brand_model, category, purchase_date, warranty_months, warranty_end_date, store_invoice, notes) " +
             "VALUES (" +
-            "${sqlEscape(phoneNumber.trim())}, " +
+            "${sqlEscape(effectiveUserPhone)}, " +
             "${sqlEscape(warranty.name)}, " +
             "${sqlEscape(warranty.brandModel)}, " +
             "${sqlEscape(warranty.category)}, " +
@@ -456,7 +724,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error saving warranty", e)
+      safeLogError("Error saving warranty", e)
       lastErrorMessage = e.message
       false
     }
@@ -471,7 +739,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error deleting warranty", e)
+      safeLogError("Error deleting warranty", e)
       lastErrorMessage = e.message
       false
     }
@@ -486,8 +754,8 @@ class MariaDBRepository {
         ensureTablesInSession(session)
         session.executeQuery(
           "SELECT id, user_phone, name, category, billing_cycle, price, next_payment_date, auto_renew, notes " +
-            "FROM subscriptions WHERE user_phone = ${sqlEscape(phoneNumber.trim())} " +
-            "ORDER BY next_payment_date ASC"
+            "FROM subscriptions WHERE ${phoneInClause("user_phone", phoneNumber)} " +
+            "ORDER BY next_payment_date ASC, id DESC"
         )
       }
       for (row in rows) {
@@ -507,7 +775,7 @@ class MariaDBRepository {
       }
       lastErrorMessage = null
     } catch (e: Exception) {
-      Log.e(TAG, "Error fetching subscriptions", e)
+      safeLogError("Error fetching subscriptions", e)
       lastErrorMessage = e.message
     }
     list
@@ -518,11 +786,12 @@ class MariaDBRepository {
       val autoRenewInt = if (sub.autoRenew) 1 else 0
       client.withConnection { session ->
         ensureTablesInSession(session)
+        val effectiveUserPhone = ensureUserRowInSession(session, phoneNumber)
         if (sub.id == 0L) {
           val sql = "INSERT INTO subscriptions " +
             "(user_phone, name, category, billing_cycle, price, next_payment_date, auto_renew, notes) " +
             "VALUES (" +
-            "${sqlEscape(phoneNumber.trim())}, " +
+            "${sqlEscape(effectiveUserPhone)}, " +
             "${sqlEscape(sub.name)}, " +
             "${sqlEscape(sub.category)}, " +
             "${sqlEscape(sub.billingCycle)}, " +
@@ -547,7 +816,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error saving subscription", e)
+      safeLogError("Error saving subscription", e)
       lastErrorMessage = e.message
       false
     }
@@ -562,7 +831,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error deleting subscription", e)
+      safeLogError("Error deleting subscription", e)
       lastErrorMessage = e.message
       false
     }
@@ -577,8 +846,8 @@ class MariaDBRepository {
         ensureTablesInSession(session)
         session.executeQuery(
           "SELECT id, user_phone, plate_and_vehicle, policy_type, company, start_date, expiry_date, notes " +
-            "FROM vehicle_insurances WHERE user_phone = ${sqlEscape(phoneNumber.trim())} " +
-            "ORDER BY expiry_date ASC"
+            "FROM vehicle_insurances WHERE ${phoneInClause("user_phone", phoneNumber)} " +
+            "ORDER BY expiry_date ASC, id DESC"
         )
       }
       for (row in rows) {
@@ -596,7 +865,7 @@ class MariaDBRepository {
       }
       lastErrorMessage = null
     } catch (e: Exception) {
-      Log.e(TAG, "Error fetching vehicle insurances", e)
+      safeLogError("Error fetching vehicle insurances", e)
       lastErrorMessage = e.message
     }
     list
@@ -606,11 +875,12 @@ class MariaDBRepository {
     try {
       client.withConnection { session ->
         ensureTablesInSession(session)
+        val effectiveUserPhone = ensureUserRowInSession(session, phoneNumber)
         if (item.id == 0L) {
           val sql = "INSERT INTO vehicle_insurances " +
             "(user_phone, plate_and_vehicle, policy_type, company, start_date, expiry_date, notes) " +
             "VALUES (" +
-            "${sqlEscape(phoneNumber.trim())}, " +
+            "${sqlEscape(effectiveUserPhone)}, " +
             "${sqlEscape(item.plateAndVehicle)}, " +
             "${sqlEscape(item.policyType)}, " +
             "${sqlEscape(item.company)}, " +
@@ -633,7 +903,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error saving vehicle insurance", e)
+      safeLogError("Error saving vehicle insurance", e)
       lastErrorMessage = e.message
       false
     }
@@ -648,7 +918,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error deleting vehicle insurance", e)
+      safeLogError("Error deleting vehicle insurance", e)
       lastErrorMessage = e.message
       false
     }
@@ -664,7 +934,7 @@ class MariaDBRepository {
         session.executeQuery(
           "SELECT id, user_phone, module_type, item_id, item_name, target_expiry_date, " +
             "days_before, notify_time, sound_tone, is_enabled " +
-            "FROM product_reminders WHERE user_phone = ${sqlEscape(phoneNumber.trim())} " +
+            "FROM product_reminders WHERE ${phoneInClause("user_phone", phoneNumber)} " +
             "ORDER BY target_expiry_date ASC"
         )
       }
@@ -686,7 +956,7 @@ class MariaDBRepository {
       }
       lastErrorMessage = null
     } catch (e: Exception) {
-      Log.e(TAG, "Error fetching reminders", e)
+      safeLogError("Error fetching reminders", e)
       lastErrorMessage = e.message
     }
     list
@@ -697,10 +967,11 @@ class MariaDBRepository {
       val enabledInt = if (reminder.isEnabled) 1 else 0
       client.withConnection { session ->
         ensureTablesInSession(session)
+        val effectiveUserPhone = ensureUserRowInSession(session, phoneNumber)
         val sql = "INSERT INTO product_reminders " +
           "(user_phone, module_type, item_id, item_name, target_expiry_date, days_before, notify_time, sound_tone, is_enabled) " +
           "VALUES (" +
-          "${sqlEscape(phoneNumber.trim())}, " +
+          "${sqlEscape(effectiveUserPhone)}, " +
           "${sqlEscape(reminder.moduleType)}, " +
           "${reminder.itemId}, " +
           "${sqlEscape(reminder.itemName)}, " +
@@ -721,7 +992,7 @@ class MariaDBRepository {
       lastErrorMessage = null
       true
     } catch (e: Exception) {
-      Log.e(TAG, "Error saving reminder", e)
+      safeLogError("Error saving reminder", e)
       lastErrorMessage = e.message
       false
     }
